@@ -1,0 +1,24 @@
+# Binaries
+odonata-proxy.exe
+odonata-proxy
+*.exe
+*.test
+
+# Go build cache artefacts
+/vendor/
+
+# Editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local config overrides (keep config.yaml as example)
+config.local.yaml

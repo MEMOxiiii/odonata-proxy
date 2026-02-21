@@ -1,0 +1,31 @@
+proxy:
+  listen: "0.0.0.0:19132"
+  motd: "§6Odonata §7Proxy"
+  max_players: 1000
+  auth_disabled: true
+  texture_packs_required: false
+  resource_packs: []
+  # resource_packs:
+  #   - "packs/MyPack.mcpack"
+
+backends:
+  - name: lobby
+    address: "127.0.0.1:19133"
+    default: true
+    warm_pool_size: 0     # set > 0 to pre-warm connections (requires auth_disabled on backends)
+
+  - name: survival
+    address: "127.0.0.1:19134"
+    default: false
+    warm_pool_size: 0
+
+rate_limit:
+  enabled: true
+  packets_per_second: 400
+  burst_size: 600
+  cleanup_interval: 30s
+
+logging:
+  level: info           # debug | info | warn | error
+  format: console       # console | json
+  output_file: ""       # leave empty for stdout only
