@@ -332,7 +332,7 @@ func newStatusProvider(motd string, maxPlayers int) *statusProvider {
 	return &statusProvider{motd: motd, maxPlayers: maxPlayers}
 }
 
-func (sp *statusProvider) ServerStatus(maxPlayers, playerCount int) minecraft.ServerStatus {
+func (sp *statusProvider) ServerStatus(playerCount, maxPlayers int) minecraft.ServerStatus {
 	return minecraft.ServerStatus{
 		ServerName:  sp.motd,
 		PlayerCount: playerCount,

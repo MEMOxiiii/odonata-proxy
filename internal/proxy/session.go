@@ -45,6 +45,14 @@ type Session struct {
 
 	// posX/Y/Z hold the player's last known position (float32 bits stored atomically).
 	posX, posY, posZ atomic.Uint32
+
+	// entityMu guards the entities map.
+	entityMu sync.Mutex
+	// entities tracks every EntityUniqueID that the current backend has sent to the
+	// client via AddActor / AddPlayer / AddItemActor / AddPainting.
+	// On server transfer we send RemoveActor for every entry so the client never
+	// sees ghost entities from the old server on the new one.
+	entities map[int64]struct{}
 }
 
 // newSession constructs a fully initialised Session.
@@ -70,6 +78,7 @@ func newSession(
 		ctx:            ctx,
 		cancel:         cancel,
 		transferNotify: notify,
+		entities:       make(map[int64]struct{}),
 	}
 }
 
@@ -160,6 +169,24 @@ func (s *Session) forwardClientToBackend() error {
 			s.posZ.Store(math.Float32bits(mp.Position[2]))
 		}
 
+		// Sanitise outgoing chat Text packets.
+		// The Bedrock client includes FilteredMessage, XUID and other fields
+		// that Dragonfly validates strictly. Critically: the proxy connects to
+		// backends without a TokenSource, so gophertunnel calls
+		// clearXBLIdentityData() and strips the XUID to "" before sending the
+		// login request. The backend therefore stores XUID="" for this session.
+		// If we forward the client's real XUID, Dragonfly rejects the message
+		// and disconnects the player. We must send XUID="" to match the backend
+		// session's stored value.
+		if txtPkt, ok := pk.(*packet.Text); ok && txtPkt.TextType == packet.TextTypeChat {
+			pk = &packet.Text{
+				TextType:   packet.TextTypeChat,
+				SourceName: s.info.Username,
+				Message:    txtPkt.Message,
+				XUID:       "", // backend session has XUID="" (cleared by gophertunnel offline dial)
+			}
+		}
+
 		// Intercept slash-commands.
 		if cmdPkt, ok := pk.(*packet.CommandRequest); ok {
 			if s.handleCommand(cmdPkt) {
@@ -198,6 +225,42 @@ func (s *Session) forwardClientToBackend() error {
 	}
 }
 
+// ─── Entity tracker ──────────────────────────────────────────────────────────
+
+// trackEntity records an entity unique ID spawned by the current backend.
+func (s *Session) trackEntity(uid int64) {
+	s.entityMu.Lock()
+	s.entities[uid] = struct{}{}
+	s.entityMu.Unlock()
+}
+
+// untrackEntity removes an entity unique ID (called when the backend despawns it normally).
+func (s *Session) untrackEntity(uid int64) {
+	s.entityMu.Lock()
+	delete(s.entities, uid)
+	s.entityMu.Unlock()
+}
+
+// removeAllEntities sends a RemoveActor packet to the client for every entity
+// tracked from the current backend, then clears the tracker.
+// Call this during server transfer before swapping the upstream so the client
+// never sees ghost entities from the old server on the new one.
+func (s *Session) removeAllEntities() {
+	s.entityMu.Lock()
+	ids := make([]int64, 0, len(s.entities))
+	for uid := range s.entities {
+		ids = append(ids, uid)
+	}
+	s.entities = make(map[int64]struct{})
+	s.entityMu.Unlock()
+
+	for _, uid := range ids {
+		_ = s.client.WritePacket(&packet.RemoveActor{
+			EntityUniqueID: uid,
+		})
+	}
+}
+
 // forwardBackendToClient reads packets from the backend and writes to the client.
 func (s *Session) forwardBackendToClient() error {
 	for {
@@ -227,6 +290,23 @@ func (s *Session) forwardBackendToClient() error {
 
 		if s.transferring.Load() == 1 {
 			continue
+		}
+
+		// Track entities spawned by this backend so we can remove them on transfer.
+		switch p := pk.(type) {
+		case *packet.AddActor:
+			s.trackEntity(p.EntityUniqueID)
+		case *packet.AddPlayer:
+			// AddPlayer has no EntityUniqueID in gophertunnel; the unique ID
+			// used by RemoveActor is int64(EntityRuntimeID) by convention.
+			s.trackEntity(int64(p.EntityRuntimeID))
+		case *packet.AddItemActor:
+			s.trackEntity(p.EntityUniqueID)
+		case *packet.AddPainting:
+			s.trackEntity(p.EntityUniqueID)
+		case *packet.RemoveActor:
+			// Entity despawned normally — remove from tracker.
+			s.untrackEntity(p.EntityUniqueID)
 		}
 
 		pctx := &middleware.PacketContext{

@@ -61,6 +61,11 @@ func (s *Session) transferTo(target config.BackendConfig) {
 	// Evict client chunk cache without showing a loading screen.
 	s.sendChunkReset()
 
+	// Remove all entities from the old server so they don't ghost on the new one.
+	// Must happen before swapping upstream so the client is clean before new
+	// entities start arriving.
+	s.removeAllEntities()
+
 	s.upstreamMu.RLock()
 	oldUpstream := s.upstream
 	s.upstreamMu.RUnlock()
